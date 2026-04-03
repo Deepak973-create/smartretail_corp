@@ -1,0 +1,525 @@
+-- Databricks notebook source
+-- MAGIC %md
+-- MAGIC # Silver Layer (Incremental Processing)
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Get catalog from widget
+-- MAGIC %python
+-- MAGIC # Get catalog from widget
+-- MAGIC catalog_name = dbutils.widgets.get("catalog")
+-- MAGIC print(f"Using catalog: {catalog_name}")
+
+-- COMMAND ----------
+
+-- MAGIC %md
+-- MAGIC Initial Full Load
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Create silver tables and control table
+-- MAGIC %python
+-- MAGIC spark.sql(f"""
+-- MAGIC drop table if exists {catalog_name}.silver.customers;
+-- MAGIC
+-- MAGIC create table if not exists {catalog_name}.silver.customers (
+-- MAGIC     customer_id int primary key,
+-- MAGIC     name string,
+-- MAGIC     city string,
+-- MAGIC     state string,
+-- MAGIC     signup_date date,
+-- MAGIC     created_at timestamp,
+-- MAGIC     updated_at timestamp,
+-- MAGIC     record_created_at timestamp,
+-- MAGIC     record_updated_at timestamp
+-- MAGIC   );
+-- MAGIC
+-- MAGIC drop table if exists {catalog_name}.silver.order_items;
+-- MAGIC
+-- MAGIC create table if not exists {catalog_name}.silver.order_items (
+-- MAGIC     order_item_id int primary key,
+-- MAGIC     order_id int,
+-- MAGIC     product_id int,
+-- MAGIC     quantity int,
+-- MAGIC     price float,
+-- MAGIC     created_at timestamp,
+-- MAGIC     updated_at timestamp,
+-- MAGIC     record_created_at timestamp,
+-- MAGIC     record_updated_at timestamp
+-- MAGIC   );
+-- MAGIC
+-- MAGIC drop table if exists {catalog_name}.silver.orders;
+-- MAGIC
+-- MAGIC create table if not exists {catalog_name}.silver.orders (
+-- MAGIC     order_id int primary key,
+-- MAGIC     customer_id int,
+-- MAGIC     order_date date,
+-- MAGIC     total_amount float,
+-- MAGIC     order_status string,
+-- MAGIC     created_at timestamp,
+-- MAGIC     updated_at timestamp,
+-- MAGIC     record_created_at timestamp,
+-- MAGIC     record_updated_at timestamp
+-- MAGIC   );
+-- MAGIC
+-- MAGIC drop table if exists {catalog_name}.silver.products;
+-- MAGIC
+-- MAGIC create table if not exists {catalog_name}.silver.products (
+-- MAGIC     product_id int primary key,
+-- MAGIC     product_name string,
+-- MAGIC     category string,
+-- MAGIC     price float,
+-- MAGIC     created_at timestamp,
+-- MAGIC     updated_at timestamp,
+-- MAGIC     record_created_at timestamp,
+-- MAGIC     record_updated_at timestamp
+-- MAGIC   );
+-- MAGIC
+-- MAGIC -- Control table to track last run time per table
+-- MAGIC drop table if exists {catalog_name}.silver.table_logger;
+-- MAGIC
+-- MAGIC create table if not exists {catalog_name}.silver.table_logger (
+-- MAGIC     table_name string primary key,
+-- MAGIC     last_run_time timestamp
+-- MAGIC   );
+-- MAGIC """)
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Initial load - customers
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC insert into {catalog_name}.silver.customers (
+-- MAGIC   customer_id, name, city, state, signup_date, created_at, updated_at, record_created_at
+-- MAGIC )
+-- MAGIC   select
+-- MAGIC     cast(customer_id as int) as customer_id,
+-- MAGIC     name,
+-- MAGIC     city,
+-- MAGIC     state,
+-- MAGIC     cast(signup_date as date) as signup_date,
+-- MAGIC     created_at,
+-- MAGIC     updated_at,
+-- MAGIC     current_timestamp() record_created_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_customers;
+-- MAGIC
+-- MAGIC insert into {catalog_name}.silver.table_logger
+-- MAGIC   select
+-- MAGIC     'customers',
+-- MAGIC     max(record_created_at) as last_run
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.customers;
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Initial load - order_items
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC insert into {catalog_name}.silver.order_items (
+-- MAGIC   order_item_id, order_id, product_id, quantity, price, created_at, updated_at, record_created_at
+-- MAGIC )
+-- MAGIC   select
+-- MAGIC     cast(order_item_id as int) as order_item_id,
+-- MAGIC     cast(order_id as int) as order_id,
+-- MAGIC     cast(product_id as int) as product_id,
+-- MAGIC     cast(quantity as int) as quantity,
+-- MAGIC     cast(price as float) as price,
+-- MAGIC     created_at,
+-- MAGIC     updated_at,
+-- MAGIC     current_timestamp() record_created_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_order_items;
+-- MAGIC
+-- MAGIC insert into {catalog_name}.silver.table_logger
+-- MAGIC   select
+-- MAGIC     'order_items',
+-- MAGIC     max(record_created_at) as last_run
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.order_items;
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Initial load - orders
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC insert into {catalog_name}.silver.orders (
+-- MAGIC   order_id, customer_id, order_date, total_amount, order_status, created_at, updated_at, record_created_at
+-- MAGIC )
+-- MAGIC   select
+-- MAGIC     cast(order_id as int) as order_id,
+-- MAGIC     cast(customer_id as int) as customer_id,
+-- MAGIC     cast(order_date as date) as order_date,
+-- MAGIC     cast(total_amount as float) as total_amount,
+-- MAGIC     order_status,
+-- MAGIC     created_at,
+-- MAGIC     updated_at,
+-- MAGIC     current_timestamp () record_created_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_orders;
+-- MAGIC
+-- MAGIC insert into {catalog_name}.silver.table_logger
+-- MAGIC   select
+-- MAGIC     'orders',
+-- MAGIC     max(record_created_at) as last_run
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.orders;
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Initial load - products
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC insert into {catalog_name}.silver.products (
+-- MAGIC   product_id, product_name, category, price, created_at, updated_at, record_created_at
+-- MAGIC )
+-- MAGIC   select
+-- MAGIC     cast(product_id as int) as product_id,
+-- MAGIC     product_name,
+-- MAGIC     category,
+-- MAGIC     cast(price as float) as price,
+-- MAGIC     created_at,
+-- MAGIC     updated_at,
+-- MAGIC     current_timestamp() record_created_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_products;
+-- MAGIC
+-- MAGIC insert into {catalog_name}.silver.table_logger
+-- MAGIC   select
+-- MAGIC     'products',
+-- MAGIC     max(record_created_at) as last_run
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.products;
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Incremental Load
+-- MAGIC %md
+-- MAGIC Incremental Load with MERGE (Upsert)
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Incremental Load - Customers
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Get last run time for customers
+-- MAGIC set var last_run = (
+-- MAGIC   select
+-- MAGIC     last_run_time
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.table_logger
+-- MAGIC   where
+-- MAGIC     table_name = 'customers'
+-- MAGIC );
+-- MAGIC
+-- MAGIC -- Merge customers with incremental data
+-- MAGIC merge into
+-- MAGIC   {catalog_name}.silver.customers as target
+-- MAGIC using (
+-- MAGIC   select
+-- MAGIC     cast(customer_id as int) as customer_id,
+-- MAGIC     name,
+-- MAGIC     city,
+-- MAGIC     state,
+-- MAGIC     cast(signup_date as date) as signup_date,
+-- MAGIC     created_at,
+-- MAGIC     updated_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_customers
+-- MAGIC   where
+-- MAGIC     created_at > last_run
+-- MAGIC     or updated_at > last_run
+-- MAGIC ) as source
+-- MAGIC on
+-- MAGIC   target.customer_id = source.customer_id
+-- MAGIC when matched then update set
+-- MAGIC   target.name = source.name,
+-- MAGIC   target.city = source.city,
+-- MAGIC   target.state = source.state,
+-- MAGIC   target.signup_date = source.signup_date,
+-- MAGIC   target.created_at = source.created_at,
+-- MAGIC   target.updated_at = source.updated_at,
+-- MAGIC   target.record_updated_at = current_timestamp()
+-- MAGIC when not matched then insert (
+-- MAGIC     customer_id, name, city, state, signup_date, created_at, updated_at, record_created_at
+-- MAGIC   )
+-- MAGIC   values (
+-- MAGIC     source.customer_id,
+-- MAGIC     source.name,
+-- MAGIC     source.city,
+-- MAGIC     source.state,
+-- MAGIC     source.signup_date,
+-- MAGIC     source.created_at,
+-- MAGIC     source.updated_at,
+-- MAGIC     current_timestamp()
+-- MAGIC   );
+-- MAGIC
+-- MAGIC -- Update control table
+-- MAGIC update
+-- MAGIC   {catalog_name}.silver.table_logger
+-- MAGIC set
+-- MAGIC   last_run_time = current_timestamp()
+-- MAGIC where
+-- MAGIC   table_name = 'customers';
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Incremental Load - Order Items
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Get last run time for order_items
+-- MAGIC set var last_run = (
+-- MAGIC   select
+-- MAGIC     last_run_time
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.table_logger
+-- MAGIC   where
+-- MAGIC     table_name = 'order_items'
+-- MAGIC );
+-- MAGIC
+-- MAGIC -- Merge order_items with incremental data
+-- MAGIC merge into
+-- MAGIC   {catalog_name}.silver.order_items as target
+-- MAGIC using (
+-- MAGIC   select
+-- MAGIC     cast(order_item_id as int) as order_item_id,
+-- MAGIC     cast(order_id as int) as order_id,
+-- MAGIC     cast(product_id as int) as product_id,
+-- MAGIC     cast(quantity as int) as quantity,
+-- MAGIC     cast(price as float) as price,
+-- MAGIC     created_at,
+-- MAGIC     updated_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_order_items
+-- MAGIC   where
+-- MAGIC     created_at > last_run
+-- MAGIC     or updated_at > last_run
+-- MAGIC ) as source
+-- MAGIC on
+-- MAGIC   target.order_item_id = source.order_item_id
+-- MAGIC when matched then update set
+-- MAGIC   target.order_id = source.order_id,
+-- MAGIC   target.product_id = source.product_id,
+-- MAGIC   target.quantity = source.quantity,
+-- MAGIC   target.price = source.price,
+-- MAGIC   target.created_at = source.created_at,
+-- MAGIC   target.updated_at = source.updated_at,
+-- MAGIC   target.record_updated_at = current_timestamp()
+-- MAGIC when not matched then insert (
+-- MAGIC     order_item_id, order_id, product_id, quantity, price, created_at, updated_at, record_created_at
+-- MAGIC   )
+-- MAGIC   values (
+-- MAGIC     source.order_item_id,
+-- MAGIC     source.order_id,
+-- MAGIC     source.order_id,
+-- MAGIC     source.quantity,
+-- MAGIC     source.price,
+-- MAGIC     source.created_at,
+-- MAGIC     source.updated_at,
+-- MAGIC     current_timestamp()
+-- MAGIC   );
+-- MAGIC
+-- MAGIC -- Update control table
+-- MAGIC update
+-- MAGIC   {catalog_name}.silver.table_logger
+-- MAGIC set
+-- MAGIC   last_run_time = current_timestamp()
+-- MAGIC where
+-- MAGIC   table_name = 'order_items';
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Incremental Load - Orders
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Get last run time for orders
+-- MAGIC set var last_run = (
+-- MAGIC   select
+-- MAGIC     last_run_time
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.table_logger
+-- MAGIC   where
+-- MAGIC     table_name = 'orders'
+-- MAGIC );
+-- MAGIC
+-- MAGIC -- Merge orders with incremental data
+-- MAGIC merge into
+-- MAGIC   {catalog_name}.silver.orders as target
+-- MAGIC using (
+-- MAGIC   select
+-- MAGIC     cast(order_id as int) as order_id,
+-- MAGIC     cast(customer_id as int) as customer_id,
+-- MAGIC     cast(order_date as date) as order_date,
+-- MAGIC     cast(total_amount as float) as total_amount,
+-- MAGIC     order_status,
+-- MAGIC     created_at,
+-- MAGIC     updated_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_orders
+-- MAGIC   where
+-- MAGIC     created_at > last_run
+-- MAGIC     or updated_at > last_run
+-- MAGIC ) as source
+-- MAGIC on
+-- MAGIC   target.order_id = source.order_id
+-- MAGIC when matched then update set
+-- MAGIC   target.customer_id = source.customer_id,
+-- MAGIC   target.order_date = source.order_date,
+-- MAGIC   target.total_amount = source.total_amount,
+-- MAGIC   target.order_status = source.order_status,
+-- MAGIC   target.created_at = source.created_at,
+-- MAGIC   target.updated_at = source.updated_at,
+-- MAGIC   target.record_updated_at = current_timestamp()
+-- MAGIC when not matched then insert (
+-- MAGIC     order_id,
+-- MAGIC     customer_id,
+-- MAGIC     order_date,
+-- MAGIC     total_amount,
+-- MAGIC     order_status,
+-- MAGIC     created_at,
+-- MAGIC     updated_at,
+-- MAGIC     record_created_at
+-- MAGIC   )
+-- MAGIC   values (
+-- MAGIC     source.order_id,
+-- MAGIC     source.customer_id,
+-- MAGIC     source.order_date,
+-- MAGIC     source.total_amount,
+-- MAGIC     source.order_status,
+-- MAGIC     source.created_at,
+-- MAGIC     source.updated_at,
+-- MAGIC     current_timestamp()
+-- MAGIC   );
+-- MAGIC
+-- MAGIC -- Update control table
+-- MAGIC update
+-- MAGIC   {catalog_name}.silver.table_logger
+-- MAGIC set
+-- MAGIC   last_run_time = current_timestamp()
+-- MAGIC where
+-- MAGIC   table_name = 'orders';
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Incremental Load - Products
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Get last run time for products
+-- MAGIC set var last_run = (
+-- MAGIC   select
+-- MAGIC     last_run_time
+-- MAGIC   from
+-- MAGIC     {catalog_name}.silver.table_logger
+-- MAGIC   where
+-- MAGIC     table_name = 'products'
+-- MAGIC );
+-- MAGIC
+-- MAGIC -- Merge products with incremental data
+-- MAGIC merge into
+-- MAGIC   {catalog_name}.silver.products as target
+-- MAGIC using (
+-- MAGIC   select
+-- MAGIC     cast(product_id as int) as product_id,
+-- MAGIC     product_name,
+-- MAGIC     category,
+-- MAGIC     cast(price as float) as price,
+-- MAGIC     created_at,
+-- MAGIC     updated_at
+-- MAGIC   from
+-- MAGIC     {catalog_name}.bronze.raw_products
+-- MAGIC   where
+-- MAGIC     created_at > last_run
+-- MAGIC     or updated_at > last_run
+-- MAGIC ) as source
+-- MAGIC on
+-- MAGIC   target.product_id = source.product_id
+-- MAGIC when matched then update set
+-- MAGIC   target.product_name = source.product_name,
+-- MAGIC   target.category = source.category,
+-- MAGIC   target.price = source.price,
+-- MAGIC   target.created_at = source.created_at,
+-- MAGIC   target.updated_at = source.updated_at,
+-- MAGIC   target.record_updated_at = current_timestamp()
+-- MAGIC when not matched then insert (
+-- MAGIC     product_id, product_name, category, price, created_at, updated_at, record_created_at
+-- MAGIC   )
+-- MAGIC   values (
+-- MAGIC     source.product_id,
+-- MAGIC     source.product_name,
+-- MAGIC     source.category,
+-- MAGIC     source.price,
+-- MAGIC     source.created_at,
+-- MAGIC     source.updated_at,
+-- MAGIC     current_timestamp()
+-- MAGIC   );
+-- MAGIC
+-- MAGIC -- Update control table
+-- MAGIC update
+-- MAGIC   {catalog_name}.silver.table_logger
+-- MAGIC set
+-- MAGIC   last_run_time = current_timestamp()
+-- MAGIC where
+-- MAGIC   table_name = 'products';
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Data Joins
+-- MAGIC %md
+-- MAGIC Table Joins
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Orders with Customer Details
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Join orders with customers to get customer information
+-- MAGIC drop table if exists {catalog_name}.silver.orders_with_customers;
+-- MAGIC create table {catalog_name}.silver.orders_with_customers as 
+-- MAGIC select
+-- MAGIC   o.order_id,
+-- MAGIC   o.order_date,
+-- MAGIC   o.total_amount,
+-- MAGIC   o.order_status,
+-- MAGIC   c.customer_id,
+-- MAGIC   c.name as customer_name,
+-- MAGIC   c.city,
+-- MAGIC   c.state,
+-- MAGIC   c.signup_date
+-- MAGIC from
+-- MAGIC   {catalog_name}.silver.orders o
+-- MAGIC   inner join {catalog_name}.silver.customers c on o.customer_id = c.customer_id;
+-- MAGIC """))
+
+-- COMMAND ----------
+
+-- DBTITLE 1,Orders with Product Details
+-- MAGIC %python
+-- MAGIC display(spark.sql(f"""
+-- MAGIC -- Join orders with order_items and products to get product information
+-- MAGIC drop table if exists {catalog_name}.silver.orders_with_products;
+-- MAGIC create table {catalog_name}.silver.orders_with_products as
+-- MAGIC select
+-- MAGIC   o.order_id,
+-- MAGIC   o.order_date,
+-- MAGIC   o.order_status,
+-- MAGIC   o.customer_id,
+-- MAGIC   oi.order_item_id,
+-- MAGIC   p.product_id,
+-- MAGIC   p.product_name,
+-- MAGIC   p.category,
+-- MAGIC   oi.quantity,
+-- MAGIC   oi.price as item_price,
+-- MAGIC   (oi.quantity * oi.price) as line_total
+-- MAGIC from
+-- MAGIC   {catalog_name}.silver.orders o
+-- MAGIC   inner join {catalog_name}.silver.order_items oi on o.order_id = oi.order_id
+-- MAGIC   inner join {catalog_name}.silver.products p on oi.product_id = p.product_id;
+-- MAGIC """))
