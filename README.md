@@ -1,0 +1,1 @@
+# smartretail_corp
